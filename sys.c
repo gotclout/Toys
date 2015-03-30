@@ -22,7 +22,7 @@
 #include <stdlib.h>
 
 /**
- *
+ * Sets the output file name for CmdData
  */
 void CmdData_SetOutF(CmdData** pCmd, char* of)
 {
@@ -34,7 +34,7 @@ void CmdData_SetOutF(CmdData** pCmd, char* of)
 }
 
 /**
- *
+ * Sets the input file name for CmdData
  */
 void CmdData_SetInF(CmdData** pCmd, char* ifi)
 {
@@ -46,7 +46,7 @@ void CmdData_SetInF(CmdData** pCmd, char* ifi)
 }
 
 /**
- *
+ * Retrieves the argument at the specified position
  */
 char* CmdData_at(CmdData* cmd, int i)
 {
@@ -54,7 +54,7 @@ char* CmdData_at(CmdData* cmd, int i)
 }
 
 /**
- *
+ * Retrieves the jth character or the ith argument in the cmd
  */
 char CmdData_argat(CmdData* cmd, int i, int j)
 {
@@ -63,7 +63,7 @@ char CmdData_argat(CmdData* cmd, int i, int j)
 }
 
 /**
- *
+ * Deallocates memory for CmdData
  */
 void CmdData_Free(CmdData** pCmd)
 {
@@ -75,7 +75,7 @@ void CmdData_Free(CmdData** pCmd)
 }
 
 /**
- *
+ * Initializes CmdData
  */
 void CmdData_Init(CmdData** pCmd)
 {
@@ -90,7 +90,7 @@ void CmdData_Init(CmdData** pCmd)
 }
 
 /**
- *
+ * Creates and allocates memory for a CmdData
  */
 CmdData* CmdData_Create()
 {
@@ -114,23 +114,47 @@ CmdData* CmdData_Create()
  */
 bool execute(CmdData* cmd)
 {
-  int ifid, ofid;
-  pid_t pid = fork(); //create child
-  if(pid < 0) { fprintf(stderr, "ERROR: could not fork subprocess\n"); return false; }
-  else if(pid == 0)             //child process
+  int ifid, ofid, wret, cstat;
+  pid_t pid = fork();                   //create child
+  if(pid < 0)
+  {
+    fprintf(stderr, "ERROR: could not fork subprocess\n");
+    return false;
+  }
+  else if(pid == 0)                     //child process
   {
     if(cmd->inf && !close(0))
       ifid = open((const char*)cmd->inf,  O_RDONLY|O_NONBLOCK,       00222);
     if(cmd->outf && !close(1))
       ofid = open((const char*)cmd->outf, O_WRONLY|O_RDONLY|O_CREAT, 00666);
-    execv(cmd->pth, cmd->args);   //execute command
-    if(cmd->inf) close(0);     //end redirection
-    if(cmd->outf) close(1);
+    execv(cmd->pth, cmd->args);         //execute command
+    if(cmd->inf)  close(ifid);//close(0);              //end redirection
+    if(cmd->outf) close(ofid);//close(1);
     perror(*cmd->args);
-    exit(0);
+    pause();
+    _exit(0);
   }
-  else if(!cmd->amp) waitpid(pid, 0, 0);
-  else usleep(50000);
+  else if(!cmd->amp)// waitpid(pid, 0, 0); //parent proc
+  {
+    do
+    {
+      wret = waitpid(pid, &cstat, 0);
+      if (wret == -1)
+      {
+        perror("waitpid");
+        exit(EXIT_FAILURE);
+      }
+      if (WIFEXITED(cstat))
+        printf("exited, status=%d\n", WEXITSTATUS(cstat));
+      else if (WIFSIGNALED(cstat))
+        printf("killed by signal %d\n", WTERMSIG(cstat));
+      else if (WIFSTOPPED(cstat))
+        printf("stopped by signal %d\n", WSTOPSIG(cstat));
+      else if (WIFCONTINUED(cstat)) printf("continued\n");
+      else if(WIFSIGNALED(cstat)) printf("unhandled signal\n");
+    } while (!WIFEXITED(cstat) && !WIFSIGNALED(cstat));
+  }
+  else usleep(50000); //give it time to produce output before prompt
   return true;
 }
 
@@ -146,7 +170,7 @@ int8_t canexec(const char* pPath, char err[])
   int8_t rv = -1;
   if(!access(pPath, F_OK) && !++rv)         //exists
   {
-    if(!access(pPath, X_OK)) rv++; //executable
+    if(!access(pPath, X_OK)) rv++;          //executable
     else strcat(strncpy(err, pPath, strlen(pPath)), " is not executable\n");
   }
   else strcat(strcpy(err, 1 + strrchr(pPath, '/')), " does not exist\n");
@@ -163,10 +187,12 @@ int8_t canexec(const char* pPath, char err[])
 bool get_cmd_pth(CmdData* cmd)
 {
   char err[MAX_LEN];
+  bool ret      = true;
   int errno     = -1, i = 1;
   char* pwdenv  = getenv("PWD"), *pthenv = 0;
   size_t pwdln  = strlen(pwdenv), pthenvln, cpyln;
-  char argat = CmdData_argat(cmd, 0, 0);
+  char argat    = CmdData_argat(cmd, 0, 0);
+
   if(argat != '.' && argat != '/' && (pthenv = getenv("PATH"))) //cmd
   {
     char pth[(pthenvln = strlen(pthenv))+1];
@@ -175,21 +201,36 @@ bool get_cmd_pth(CmdData* cmd)
     for( ; p && errno == -1; p = strtok(0, ":"))
     {
       memset(cmd->pth, 0, cmd->plen);
-      if(*p == '.')strcat(strcat(strncpy(cmd->pth, pwdenv, pwdln), "/"), CmdData_at(cmd, 0));
-      else strcat(strcat(strncpy(cmd->pth, p, strlen(p)), "/"), CmdData_at(cmd, 0));
+      if(*p == '.')
+        strcat(strcat(strncpy(cmd->pth, pwdenv, pwdln), "/"), CmdData_at(cmd, 0));
+      else
+        strcat(strcat(strncpy(cmd->pth, p, strlen(p)), "/"), CmdData_at(cmd, 0));
       errno = canexec(cmd->pth, (char*)memset(err, 0, MAX_LEN));
     }
   }
   else // ./cmd else ../ else err
   {
-    if(CmdData_argat(cmd, 0, 0) == '/'){ strcat(cmd->pth, CmdData_at(cmd, 0)); i = 0;}
-    else if(CmdData_argat(cmd, 0, 0) == '.' && CmdData_argat(cmd, 0, i) == '/') cpyln = pwdln;
-    else if(CmdData_argat(cmd, 0,i++) == '.')cpyln = pwdln-strlen(strrchr(pwdenv, '/'));
-    else {fprintf(stderr, "ERROR: Invalid command input\n"); return 0;}
-    if(i)strcat(strncpy(cmd->pth, pwdenv, cpyln), CmdData_at(cmd, 0)+i);
-    errno = canexec(cmd->pth, (char*)memset(err, 0, MAX_LEN));
+    if(CmdData_argat(cmd, 0, 0) == '/')
+    {
+      strcat(cmd->pth, CmdData_at(cmd, 0));
+      i = 0;
+    }
+    else if(CmdData_argat(cmd, 0, 0) == '.' &&
+            CmdData_argat(cmd, 0, i) == '/')
+      cpyln = pwdln;
+    else if(CmdData_argat(cmd, 0, i++) == '.') // TODO: check second . in ../ ?
+      cpyln = pwdln-strlen(strrchr(pwdenv, '/'));
+    else
+    {
+      fprintf(stderr, "ERROR: Invalid command input\n");
+      ret = false;
+    }
+    if(i && ret)strcat(strncpy(cmd->pth, pwdenv, cpyln), CmdData_at(cmd, 0)+i);
+    if(ret)errno = canexec(cmd->pth, (char*)memset(err, 0, MAX_LEN));
   }
-  return errno == 1 || !(fprintf(stderr, "ERROR: %s",  err));
+  if(ret) ret = errno == 1 || !(fprintf(stderr, "ERROR: %s",  err));
+
+  return ret;
 }
 
 /**
@@ -237,7 +278,7 @@ int system(const char* command)
 {
   CmdData* cmd = CmdData_Create();
   get_args(cmd);
-  int ifid, ofid;
+  int ifid, ofid, cstat, wret;
   pid_t pid = fork(); //create child
   if(pid < 0) { fprintf(stderr, "ERROR: could not fork subprocess\n"); return false; }
   else if(pid == 0)             //child process
@@ -252,7 +293,7 @@ int system(const char* command)
     perror(*cmd->args);
     exit(0);
   }
-  else if(!cmd->amp) waitpid(pid, 0, 0);
+  else if(!cmd->amp) waitpid(pid, 0, 0); //parent proc
   else usleep(50000);
   return true;
 }
@@ -272,8 +313,10 @@ int main(int argc, char** argv)
     int fflag = -1;
     for( ; i < cmd->argc; ++i) //check for & < > flags
     {
-      if(CmdData_argat(cmd, i, 0) == '<') CmdData_SetInF(&cmd, CmdData_at(cmd, ++i));
-      else if(CmdData_argat(cmd, i, 0) == '>') CmdData_SetOutF(&cmd, CmdData_at(cmd, ++i));
+      if(CmdData_argat(cmd, i, 0) == '<')
+        CmdData_SetInF(&cmd, CmdData_at(cmd, ++i));
+      else if(CmdData_argat(cmd, i, 0) == '>')
+        CmdData_SetOutF(&cmd, CmdData_at(cmd, ++i));
       else if(CmdData_argat(cmd, i, 0) == '&') cmd->amp = true;
       else if(!cmd->inf && !cmd->outf && !cmd->amp) ++argc;
 
