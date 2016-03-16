@@ -8,7 +8,7 @@ using namespace std;
 
 void guess()
 {
-  int rn = rand() % 100,
+  int rn = (rand() % 100) + 1,
       g  = -1,
       at = 0;
 
